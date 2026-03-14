@@ -1,12 +1,20 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import Image from "next/image";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Bell, MessageCircle, Grid3X3, Bookmark, Heart } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/utils/supabase/client";
 import { UserProfile } from "@/types/global";
+import { useFollowers, useFollowing } from "@stream-io/feeds-client/react-bindings";
+import {
+  Drawer,
+  DrawerContent,
+  DrawerHeader,
+  DrawerTitle,
+} from "@/components/ui/drawer";
 
 type Tab = "posts" | "saved" | "liked";
 
@@ -220,6 +228,14 @@ export default function ProfilePage() {
   const { user, client } = useAuth();
   const [profileData, setProfileData] = useState<UserProfile | null>(null)
   const [activeTab, setActiveTab] = useState<Tab>("posts");
+  const [listDrawer, setListDrawer] = useState<"followers" | "following" | null>(null);
+
+  const userFeed = useMemo(
+    () => (client && user ? client.feed("user", user.id) : null),
+    [client, user?.id]
+  );
+  const followersData = useFollowers(userFeed ?? undefined);
+  const followingData = useFollowing(userFeed ?? undefined);
 
   const displayName = profileData?.full_name ?? user?.user_metadata?.full_name ?? "User";
   const username = profileData?.username ?? user?.user_metadata?.username ?? "user";
@@ -247,19 +263,26 @@ export default function ProfilePage() {
 
   const [fetching, setFetching] = useState(true)
   const [posts, setPosts] = useState<PostActivity[]>([])
+  const [feedCounts, setFeedCounts] = useState<{
+    posts: number;
+    followers: number;
+    following: number;
+  }>({ posts: 0, followers: 0, following: 0 })
 
   useEffect(() => {
     const fetchUserPosts = async () => {
-      if (!client || !user) return
+      if (!userFeed || !user) return
       try {
         setFetching(true)
-        // Create a feed (or get its data if exists)
-        const feed = client.feed("user", user.id);
-        // Subscribe to WebSocket events for state updates
-        const response = await feed.getOrCreate({ watch: true });
-        // console.log("response")
-        // console.log(response)
-
+        const response = await userFeed.getOrCreate({ watch: true });
+        const feedData = response.feed;
+        if (feedData) {
+          setFeedCounts({
+            posts: feedData.activity_count ?? 0,
+            followers: feedData.follower_count ?? 0,
+            following: feedData.following_count ?? 0,
+          });
+        }
         setPosts(response.activities.map((activity) => ({
           id: activity.id,
           text: activity.text ?? "",
@@ -279,7 +302,7 @@ export default function ProfilePage() {
       }
     }
     fetchUserPosts()
-  }, [user?.id])
+  }, [user?.id, userFeed])
 
   return (
     <div className="flex flex-col h-screen bg-white">
@@ -350,17 +373,25 @@ export default function ProfilePage() {
         {/* Stats */}
         <div className="flex items-center mt-5 mx-4 py-4 border-y border-gray-100">
           <div className="flex-1 flex flex-col items-center">
-            <span className="text-xl font-extrabold text-gray-900">347</span>
+            <span className="text-xl font-extrabold text-gray-900">{feedCounts.posts}</span>
             <span className="text-xs text-gray-500 mt-0.5">Posts</span>
           </div>
-          <div className="flex-1 flex flex-col items-center border-x border-gray-100">
-            <span className="text-xl font-extrabold text-gray-900">12.5K</span>
+          <button
+            type="button"
+            onClick={() => setListDrawer("followers")}
+            className="flex-1 flex flex-col items-center border-x border-gray-100 hover:opacity-80 transition"
+          >
+            <span className="text-xl font-extrabold text-gray-900">{feedCounts.followers}</span>
             <span className="text-xs text-gray-500 mt-0.5">Followers</span>
-          </div>
-          <div className="flex-1 flex flex-col items-center">
-            <span className="text-xl font-extrabold text-gray-900">900</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setListDrawer("following")}
+            className="flex-1 flex flex-col items-center hover:opacity-80 transition"
+          >
+            <span className="text-xl font-extrabold text-gray-900">{feedCounts.following}</span>
             <span className="text-xs text-gray-500 mt-0.5">Following</span>
-          </div>
+          </button>
         </div>
 
         {/* Action buttons */}
@@ -424,6 +455,166 @@ export default function ProfilePage() {
           </div>
         )}
       </div>
+
+      {/* Followers drawer */}
+      <Drawer open={listDrawer === "followers"} onOpenChange={(open) => !open && setListDrawer(null)}>
+        <DrawerContent className="flex flex-col max-h-[75vh]">
+          <DrawerHeader className="border-b border-gray-100 pb-3">
+            <DrawerTitle className="text-base font-semibold text-gray-900">Followers</DrawerTitle>
+          </DrawerHeader>
+          <div className="flex-1 overflow-y-auto px-4 py-3">
+            <FollowersList
+              followersData={followersData}
+              onUserClick={() => setListDrawer(null)}
+            />
+          </div>
+        </DrawerContent>
+      </Drawer>
+
+      {/* Following drawer */}
+      <Drawer open={listDrawer === "following"} onOpenChange={(open) => !open && setListDrawer(null)}>
+        <DrawerContent className="flex flex-col max-h-[75vh]">
+          <DrawerHeader className="border-b border-gray-100 pb-3">
+            <DrawerTitle className="text-base font-semibold text-gray-900">Following</DrawerTitle>
+          </DrawerHeader>
+          <div className="flex-1 overflow-y-auto px-4 py-3">
+            <FollowingList
+              followingData={followingData}
+              onUserClick={() => setListDrawer(null)}
+            />
+          </div>
+        </DrawerContent>
+      </Drawer>
+    </div>
+  );
+}
+
+function FollowersList({
+  followersData,
+  onUserClick,
+}: {
+  followersData: ReturnType<typeof useFollowers> | undefined;
+  onUserClick: () => void;
+}) {
+  const followers = followersData?.followers ?? [];
+  const hasNext = followersData?.has_next_page ?? false;
+  const loading = followersData?.is_loading_next_page ?? false;
+  const loadNext = followersData?.loadNextPage;
+
+  useEffect(() => {
+    if (followers.length === 0 && loadNext && !loading) loadNext({});
+  }, [loadNext, loading, followers.length]);
+
+  if (followers.length === 0 && !loading) {
+    return <p className="text-center text-sm text-gray-400 py-8">No followers yet</p>;
+  }
+  return (
+    <div className="space-y-1">
+      {followers.map((f) => {
+        const feed = f.source_feed;
+        const user = feed?.created_by;
+        const id = feed?.id ?? user?.id ?? "";
+        const name = user?.custom?.full_name ?? user?.name ?? id;
+        const username = user?.name ?? id;
+        const avatar = user?.image ?? null;
+        return (
+          <Link
+            key={f.target_feed?.feed + "-" + f.source_feed?.feed}
+            href={`/profile/${id}`}
+            onClick={onUserClick}
+            className="flex items-center gap-3 py-2.5 rounded-lg hover:bg-gray-50"
+          >
+            <div className="w-10 h-10 rounded-full overflow-hidden bg-gray-200 shrink-0">
+              {avatar ? (
+                <Image src={avatar} alt={name} width={40} height={40} className="object-cover w-full h-full" unoptimized />
+              ) : (
+                <div className="w-full h-full bg-gray-400 flex items-center justify-center text-white font-semibold text-sm">
+                  {(name ?? "?")[0]}
+                </div>
+              )}
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold text-gray-900 truncate">{name}</p>
+              <p className="text-xs text-gray-400 truncate">@{username}</p>
+            </div>
+          </Link>
+        );
+      })}
+      {hasNext && (
+        <button
+          type="button"
+          onClick={() => loadNext?.({})}
+          disabled={loading}
+          className="w-full text-sm text-purple-600 font-medium py-2 disabled:opacity-50"
+        >
+          {loading ? "Loading…" : "Load more"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function FollowingList({
+  followingData,
+  onUserClick,
+}: {
+  followingData: ReturnType<typeof useFollowing> | undefined;
+  onUserClick: () => void;
+}) {
+  const following = followingData?.following ?? [];
+  const hasNext = followingData?.has_next_page ?? false;
+  const loading = followingData?.is_loading_next_page ?? false;
+  const loadNext = followingData?.loadNextPage;
+
+  useEffect(() => {
+    if (following.length === 0 && loadNext && !loading) loadNext({});
+  }, [loadNext, loading, following.length]);
+
+  if (following.length === 0 && !loading) {
+    return <p className="text-center text-sm text-gray-400 py-8">Not following anyone yet</p>;
+  }
+  return (
+    <div className="space-y-1">
+      {following.map((f) => {
+        const feed = f.target_feed;
+        const user = feed?.created_by;
+        const id = feed?.id ?? user?.id ?? "";
+        const name = user?.custom?.full_name ?? user?.name ?? id;
+        const username = user?.name ?? id;
+        const avatar = user?.image ?? null;
+        return (
+          <Link
+            key={f.source_feed?.feed + "-" + f.target_feed?.feed}
+            href={`/profile/${id}`}
+            onClick={onUserClick}
+            className="flex items-center gap-3 py-2.5 rounded-lg hover:bg-gray-50"
+          >
+            <div className="w-10 h-10 rounded-full overflow-hidden bg-gray-200 shrink-0">
+              {avatar ? (
+                <Image src={avatar} alt={name} width={40} height={40} className="object-cover w-full h-full" unoptimized />
+              ) : (
+                <div className="w-full h-full bg-gray-400 flex items-center justify-center text-white font-semibold text-sm">
+                  {(name ?? "?")[0]}
+                </div>
+              )}
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold text-gray-900 truncate">{name}</p>
+              <p className="text-xs text-gray-400 truncate">@{username}</p>
+            </div>
+          </Link>
+        );
+      })}
+      {hasNext && (
+        <button
+          type="button"
+          onClick={() => loadNext?.({})}
+          disabled={loading}
+          className="w-full text-sm text-purple-600 font-medium py-2 disabled:opacity-50"
+        >
+          {loading ? "Loading…" : "Load more"}
+        </button>
+      )}
     </div>
   );
 }

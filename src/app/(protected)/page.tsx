@@ -29,7 +29,8 @@ import {
   CommentResponse,
   Feed,
 } from "@stream-io/feeds-client";
-import { useActivityComments, useFeedActivities } from "@stream-io/feeds-client/react-bindings";
+import Link from "next/link";
+import { useActivityComments, useFeedActivities, useOwnFollowings } from "@stream-io/feeds-client/react-bindings";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -388,13 +389,31 @@ function PostCard({
   } = useActivityComments({ feed, parentComment: undefined, activity });
   const hasLiked = !!activity.own_reactions?.filter((reaction) => (reaction.activity_id === activity.id && reaction.user.id === user?.id))[0];
   const hasBookmarked = !!activity.own_bookmarks?.filter((bookmark) => (bookmark.activity?.id === activity.id && bookmark.user?.id === user?.id))[0];
-  // console.log({ caption: activity.text, hasLiked, activity, comments });
-  // console.log({ caption: activity.text, comments, has_next_page });
+  const { own_followings } = useOwnFollowings(feed) ?? {};
+  const isFollowing = !!own_followings?.some(
+    (f) => f.target_feed?.id === actorId || f.target_feed?.feed === `user:${actorId}`
+  );
+  const isOwnPost = actorId === user?.id;
+  const [followLoading, setFollowLoading] = useState(false);
 
   useEffect(() => {
     if (!client) return;
     loadNextPage()
   }, [])
+
+  async function toggleFollow() {
+    if (!client || !user?.id || isOwnPost || followLoading) return;
+    setFollowLoading(true);
+    try {
+      if (isFollowing) {
+        await client.unfollow({ source: `timeline:${user.id}`, target: `user:${actorId}` });
+      } else {
+        await client.follow({ source: `timeline:${user.id}`, target: `user:${actorId}` });
+      }
+    } finally {
+      setFollowLoading(false);
+    }
+  }
 
 
   async function toggleActivityReaction(activity_id: string, reaction_type: "like" | "dislike") {
@@ -459,7 +478,7 @@ function PostCard({
       <div className="bg-white">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3">
-          <div className="flex items-center gap-3">
+          <Link href={isOwnPost ? "/profile" : `/profile/${actorId}`} className="flex items-center gap-3 min-w-0 flex-1">
             <div className="w-9 h-9 rounded-full overflow-hidden bg-gray-200 shrink-0">
               {avatar ? (
                 <Image
@@ -474,16 +493,32 @@ function PostCard({
                 <AvatarPlaceholder seed={actorId} />
               )}
             </div>
-            <div>
-              <p className="text-sm font-semibold text-gray-900 leading-tight">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-gray-900 leading-tight truncate">
                 {fullName}
               </p>
               <p className="text-[11px] text-gray-400">{timeAgo(dateStr?.toISOString() ?? "")}</p>
             </div>
+          </Link>
+          <div className="flex items-center gap-2 shrink-0">
+            {!isOwnPost && (
+              <button
+                type="button"
+                onClick={toggleFollow}
+                disabled={followLoading}
+                className={`px-3 py-1.5 rounded-full text-xs font-semibold transition disabled:opacity-50 ${
+                  isFollowing
+                    ? "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                    : "bg-purple-500 text-white hover:opacity-90"
+                }`}
+              >
+                {followLoading ? "…" : isFollowing ? "Following" : "Follow"}
+              </button>
+            )}
+            <button className="p-1 -mr-1" type="button">
+              <MoreHorizontal className="size-5 text-gray-400" />
+            </button>
           </div>
-          <button className="p-1 -mr-1">
-            <MoreHorizontal className="size-5 text-gray-400" />
-          </button>
         </div>
 
         {/* Media */}
