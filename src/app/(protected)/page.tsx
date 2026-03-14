@@ -12,6 +12,10 @@ import {
   MoreHorizontal,
   Plus,
   Send,
+  Pencil,
+  Trash2,
+  Check,
+  X,
 } from "lucide-react";
 import {
   Drawer,
@@ -20,7 +24,11 @@ import {
   DrawerTitle,
 } from "@/components/ui/drawer";
 import { useAuth } from "@/contexts/AuthContext";
-import { ActivityResponse, Feed } from "@stream-io/feeds-client";
+import {
+  ActivityResponse,
+  CommentResponse,
+  Feed,
+} from "@stream-io/feeds-client";
 import { useActivityComments, useFeedActivities } from "@stream-io/feeds-client/react-bindings";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -78,6 +86,271 @@ function AvatarPlaceholder({ seed }: { seed: string | number }) {
   );
 }
 
+// ─── Comment reply row (used in list and in CommentReplies) ────────────────────
+
+type CommentLike = { user?: { id?: string } };
+/** Minimal comment shape for display; API may return more (e.g. CommentResponse). */
+type CommentRowData = {
+  id: string;
+  user: StreamActor;
+  text: string;
+  created_at?: string | Date;
+  reaction_count?: number;
+  own_reactions?: CommentLike[];
+  reply_count?: number;
+};
+
+function CommentRow({
+  comment,
+  onLike,
+  onReply,
+  replyingToId,
+  hasLiked,
+  likeCount,
+  showReplyCta = true,
+  isOwnComment = false,
+  isEditing = false,
+  onStartEdit,
+  onSaveEdit,
+  onCancelEdit,
+  onDelete,
+}: {
+  comment: CommentRowData;
+  onLike: () => void;
+  onReply: () => void;
+  replyingToId: string | null;
+  hasLiked: boolean;
+  likeCount: number;
+  showReplyCta?: boolean;
+  isOwnComment?: boolean;
+  isEditing?: boolean;
+  onStartEdit?: () => void;
+  onSaveEdit?: (newText: string) => void;
+  onCancelEdit?: () => void;
+  onDelete?: () => void;
+}) {
+  const actor = getActorInfo(comment.user);
+  const createdAt =
+    comment.created_at instanceof Date
+      ? comment.created_at.toISOString()
+      : comment.created_at ?? "";
+  const [editText, setEditText] = useState(comment.text ?? "");
+
+  useEffect(() => {
+    if (isEditing) setEditText(comment.text ?? "");
+  }, [isEditing, comment.text]);
+
+  return (
+    <div className="flex gap-3">
+      <div className="w-8 h-8 rounded-full overflow-hidden bg-gray-200 shrink-0">
+        {actor.avatar ? (
+          <Image
+            src={actor.avatar}
+            alt={actor.username}
+            width={32}
+            height={32}
+            className="object-cover w-full h-full"
+            unoptimized
+          />
+        ) : (
+          <AvatarPlaceholder seed={actor.id} />
+        )}
+      </div>
+      <div className="flex-1 min-w-0">
+        {isEditing ? (
+          <div className="space-y-1.5">
+            <input
+              value={editText}
+              onChange={(e) => setEditText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && editText.trim()) {
+                  onSaveEdit?.(editText.trim());
+                } else if (e.key === "Escape") {
+                  onCancelEdit?.();
+                }
+              }}
+              className="w-full text-sm bg-gray-50 rounded-lg px-3 py-1.5 outline-none focus:ring-2 focus:ring-purple-200"
+              autoFocus
+            />
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => editText.trim() && onSaveEdit?.(editText.trim())}
+                disabled={!editText.trim()}
+                className="flex items-center gap-1 text-[11px] text-purple-600 font-medium disabled:opacity-40"
+              >
+                <Check className="size-3" strokeWidth={2.5} />
+                Save
+              </button>
+              <button
+                type="button"
+                onClick={onCancelEdit}
+                className="flex items-center gap-1 text-[11px] text-gray-500 font-medium"
+              >
+                <X className="size-3" strokeWidth={2.5} />
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <p className="text-sm text-gray-800 leading-snug">
+              <span className="font-semibold mr-1">{actor.username}</span>
+              {comment.text}
+            </p>
+            <div className="flex items-center gap-3 mt-0.5 group">
+              <span className="text-[11px] text-gray-400">
+                {timeAgo(createdAt)}
+              </span>
+              <button
+                type="button"
+                onClick={onLike}
+                className="flex items-center gap-1 text-[11px] text-gray-500 hover:text-red-500 transition-colors"
+              >
+                <Heart
+                  className={
+                    hasLiked
+                      ? "size-3.5 fill-red-500 text-red-500"
+                      : "size-3.5 text-gray-500 transition-colors"
+                  }
+                  strokeWidth={hasLiked ? 0 : 1.8}
+                />
+                {likeCount > 0 && <span>{likeCount}</span>}
+              </button>
+              {showReplyCta && (
+                <button
+                  type="button"
+                  onClick={onReply}
+                  className="text-[11px] text-gray-500 hover:text-purple-600 font-medium"
+                >
+                  Reply
+                </button>
+              )}
+              {isOwnComment && (
+                <div className="flex items-center gap-2 opacity-0 select-none group-hover:select-auto group-hover:opacity-100 transition-opacity">
+                  <button
+                    type="button"
+                    onClick={onStartEdit}
+                    className="flex items-center gap-0.5 text-[11px] text-gray-500 hover:text-purple-600 font-medium"
+                  >
+                    <Pencil className="size-3" strokeWidth={1.8} />
+                    Edit
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onDelete}
+                    className="flex items-center gap-0.5 text-[11px] text-gray-500 hover:text-red-500 font-medium"
+                  >
+                    <Trash2 className="size-3" strokeWidth={1.8} />
+                    Delete
+                  </button>
+                </div>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Nested replies (loads when expanded) ───────────────────────────────────────
+function CommentReplies({
+  feed,
+  activity,
+  parentComment,
+  currentUserId,
+  replyingToId,
+  onReplyClick,
+  toggleCommentReaction,
+  editingCommentId,
+  onStartEdit,
+  onSaveEdit,
+  onCancelEdit,
+  onDelete,
+}: {
+  feed: Feed | undefined;
+  activity: ActivityResponse;
+  parentComment: CommentResponse;
+  currentUserId: string | undefined;
+  replyingToId: string | null;
+  onReplyClick: (commentId: string, username: string) => void;
+  toggleCommentReaction: (commentId: string, type: "like" | "dislike") => void;
+  editingCommentId: string | null;
+  onStartEdit: (commentId: string) => void;
+  onSaveEdit: (commentId: string, newText: string) => void;
+  onCancelEdit: () => void;
+  onDelete: (commentId: string) => void;
+}) {
+  const {
+    comments: replies,
+    has_next_page,
+    is_loading_next_page,
+    loadNextPage,
+  } = useActivityComments({
+    feed,
+    parentComment,
+    activity,
+  });
+
+  useEffect(() => {
+    loadNextPage();
+  }, []);
+
+  const commentList = replies ?? [];
+
+  if (commentList.length === 0 && !is_loading_next_page) return null;
+
+  return (
+    <div className="ml-8 mt-2 pl-3 border-l-2 border-gray-100 space-y-3">
+      {commentList.length === 0 && is_loading_next_page && (
+        <div className="flex items-center justify-center py-2">
+          <div className="w-4 h-4 border-2 border-gray-200 border-t-purple-500 rounded-full animate-spin" />
+        </div>
+      )}
+      {commentList.map((reply) => {
+        const rc = reply as unknown as CommentRowData;
+        const hasLiked = !!rc.own_reactions?.some(
+          (r) => (r as { user?: { id?: string } }).user?.id === currentUserId
+        );
+        const likeCount = rc.reaction_count ?? 0;
+        const actor = getActorInfo(reply.user);
+        const isOwn = typeof reply.user !== "string" && reply.user?.id === currentUserId;
+        return (
+          <CommentRow
+            key={reply.id}
+            comment={rc}
+            hasLiked={hasLiked}
+            likeCount={likeCount}
+            replyingToId={replyingToId}
+            onLike={() =>
+              toggleCommentReaction(reply.id, hasLiked ? "dislike" : "like")
+            }
+            onReply={() => onReplyClick(reply.id, actor.username)}
+            showReplyCta={true}
+            isOwnComment={isOwn}
+            isEditing={editingCommentId === reply.id}
+            onStartEdit={() => onStartEdit(reply.id)}
+            onSaveEdit={(newText) => onSaveEdit(reply.id, newText)}
+            onCancelEdit={onCancelEdit}
+            onDelete={() => onDelete(reply.id)}
+          />
+        );
+      })}
+      {has_next_page && (
+        <button
+          type="button"
+          onClick={() => loadNextPage()}
+          disabled={is_loading_next_page}
+          className="text-xs text-blue-500 font-medium disabled:opacity-50"
+        >
+          {is_loading_next_page ? "Loading…" : "Load more replies"}
+        </button>
+      )}
+    </div>
+  );
+}
+
 // ─── Post Card ────────────────────────────────────────────────────────────────
 
 function PostCard({
@@ -99,6 +372,14 @@ function PostCard({
   const [commentsOpen, setCommentsOpen] = useState(false);
   const [commentDraft, setCommentDraft] = useState("");
   const [isSubmittingComment, setIsSubmittingComment] = useState(false);
+  const [replyingToComment, setReplyingToComment] = useState<{
+    id: string;
+    username: string;
+  } | null>(null);
+  const [expandedReplyIds, setExpandedReplyIds] = useState<Set<string>>(
+    new Set()
+  );
+  const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
   const {
     comments,
     has_next_page,
@@ -129,13 +410,41 @@ function PostCard({
     });
   }
 
-  async function addComment(activity_id: string, comment: string) {
+  async function addComment(
+    activity_id: string,
+    comment: string,
+    parent_id?: string
+  ) {
     if (!client || !activity_id || !comment) return;
-    await client.addComment({
-      comment,
-      object_id: activity_id,
-      object_type: "activity",
-    });
+    await client.addComment(
+      parent_id
+        ? { comment, parent_id }
+        : { comment, object_id: activity_id, object_type: "activity" }
+    );
+  }
+
+  async function toggleCommentReaction(
+    comment_id: string,
+    reaction_type: "like" | "dislike"
+  ) {
+    if (!client || !comment_id) return;
+    if (reaction_type === "like") {
+      await client.addCommentReaction({ id: comment_id, type: "like" });
+    } else {
+      await client.deleteCommentReaction({ id: comment_id, type: "like" });
+    }
+  }
+
+  async function handleEditComment(commentId: string, newText: string) {
+    if (!client || !commentId || !newText) return;
+    await client.updateComment({ id: commentId, comment: newText });
+    setEditingCommentId(null);
+  }
+
+  async function handleDeleteComment(commentId: string) {
+    if (!client || !commentId) return;
+    if (!window.confirm("Delete this comment?")) return;
+    await client.deleteComment({ id: commentId });
   }
 
   async function addBookmark(activity_id: string) {
@@ -254,7 +563,16 @@ function PostCard({
       </div>
 
       {/* Comments Drawer */}
-      <Drawer open={commentsOpen} onOpenChange={setCommentsOpen}>
+      <Drawer
+        open={commentsOpen}
+        onOpenChange={(open) => {
+          setCommentsOpen(open);
+          if (!open) {
+            setReplyingToComment(null);
+            setEditingCommentId(null);
+          }
+        }}
+      >
         <DrawerContent className="flex flex-col max-h-[75vh]">
           <DrawerHeader className="border-b border-gray-100 pb-3">
             <DrawerTitle className="text-base font-semibold text-gray-900">
@@ -272,32 +590,77 @@ function PostCard({
               </p>
             ) : (
               (comments ?? []).map((comment) => {
+                const hasLiked = !!comment.own_reactions?.some(
+                  (r) => r.user?.id === user?.id
+                );
+                const likeCount = comment.reaction_count ?? 0;
+                const replyCount = comment.reply_count ?? 0;
+                const isExpanded = expandedReplyIds.has(comment.id);
                 const actor = getActorInfo(comment.user);
+                const isOwn = typeof comment.user !== "string" && comment.user?.id === user?.id;
                 return (
-                  <div key={comment.id} className="flex gap-3">
-                    <div className="w-8 h-8 rounded-full overflow-hidden bg-gray-200 shrink-0">
-                      {actor.avatar ? (
-                        <Image
-                          src={actor.avatar}
-                          alt={actor.username}
-                          width={32}
-                          height={32}
-                          className="object-cover w-full h-full"
-                          unoptimized
-                        />
-                      ) : (
-                        <AvatarPlaceholder seed={actor.id} />
-                      )}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm text-gray-800 leading-snug">
-                        <span className="font-semibold mr-1">{actor.username}</span>
-                        {comment.text}
-                      </p>
-                      <p className="text-[11px] text-gray-400 mt-0.5">
-                        {timeAgo(comment.created_at?.toISOString())}
-                      </p>
-                    </div>
+                  <div key={comment.id} className="space-y-1">
+                    <CommentRow
+                      comment={comment as CommentRowData}
+                      hasLiked={hasLiked}
+                      likeCount={likeCount}
+                      replyingToId={replyingToComment?.id ?? null}
+                      onLike={() =>
+                        toggleCommentReaction(
+                          comment.id,
+                          hasLiked ? "dislike" : "like"
+                        )
+                      }
+                      onReply={() =>
+                        setReplyingToComment({
+                          id: comment.id,
+                          username: actor.username,
+                        })
+                      }
+                      showReplyCta={true}
+                      isOwnComment={isOwn}
+                      isEditing={editingCommentId === comment.id}
+                      onStartEdit={() => setEditingCommentId(comment.id)}
+                      onSaveEdit={(newText) => handleEditComment(comment.id, newText)}
+                      onCancelEdit={() => setEditingCommentId(null)}
+                      onDelete={() => handleDeleteComment(comment.id)}
+                    />
+                    {replyCount > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setExpandedReplyIds((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(comment.id)) next.delete(comment.id);
+                            else next.add(comment.id);
+                            return next;
+                          });
+                        }}
+                        className="text-xs text-gray-500 hover:text-purple-600 font-medium ml-11"
+                      >
+                        {isExpanded
+                          ? "Hide replies"
+                          : `View ${replyCount} ${replyCount === 1 ? "reply" : "replies"}`}
+                      </button>
+                    )}
+                    {isExpanded && (
+                      <CommentReplies
+                        feed={feed}
+                        activity={activity}
+                        parentComment={comment}
+                        currentUserId={user?.id}
+                        replyingToId={replyingToComment?.id ?? null}
+                        onReplyClick={(id, username) =>
+                          setReplyingToComment({ id, username })
+                        }
+                        toggleCommentReaction={toggleCommentReaction}
+                        editingCommentId={editingCommentId}
+                        onStartEdit={(id) => setEditingCommentId(id)}
+                        onSaveEdit={(id, newText) => handleEditComment(id, newText)}
+                        onCancelEdit={() => setEditingCommentId(null)}
+                        onDelete={(id) => handleDeleteComment(id)}
+                      />
+                    )}
                   </div>
                 );
               })
@@ -315,27 +678,60 @@ function PostCard({
           </div>
 
           {/* Compose */}
-          <div className="border-t border-gray-100 px-4 py-3 flex items-center gap-3">
+          <div className="border-t border-gray-100 px-4 py-3 flex flex-col gap-2">
+            {replyingToComment && (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-gray-500">
+                  Reply to @{replyingToComment.username}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setReplyingToComment(null)}
+                  className="text-xs text-purple-600 font-medium"
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+            <div className="flex items-center gap-3">
             <input
               value={commentDraft}
               onChange={(e) => setCommentDraft(e.target.value)}
               onKeyDown={async (e) => {
-                if (e.key === "Enter" && commentDraft.trim() && !isSubmittingComment) {
+                if (
+                  e.key === "Enter" &&
+                  commentDraft.trim() &&
+                  !isSubmittingComment
+                ) {
                   setIsSubmittingComment(true);
-                  await addComment(activity.id, commentDraft.trim());
+                  await addComment(
+                    activity.id,
+                    commentDraft.trim(),
+                    replyingToComment?.id
+                  );
                   setCommentDraft("");
+                  setReplyingToComment(null);
                   setIsSubmittingComment(false);
                 }
               }}
-              placeholder="Add a comment…"
+              placeholder={
+                replyingToComment
+                  ? `Reply to @${replyingToComment.username}…`
+                  : "Add a comment…"
+              }
               className="flex-1 text-sm bg-gray-50 rounded-full px-4 py-2 outline-none focus:ring-2 focus:ring-purple-200 placeholder:text-gray-400"
             />
             <button
               disabled={!commentDraft.trim() || isSubmittingComment}
               onClick={async () => {
                 setIsSubmittingComment(true);
-                await addComment(activity.id, commentDraft.trim());
+                await addComment(
+                  activity.id,
+                  commentDraft.trim(),
+                  replyingToComment?.id
+                );
                 setCommentDraft("");
+                setReplyingToComment(null);
                 setIsSubmittingComment(false);
               }}
               className="shrink-0 w-9 h-9 rounded-full bg-purple-500 flex items-center justify-center disabled:opacity-40 active:scale-90 transition-transform"
@@ -346,6 +742,7 @@ function PostCard({
                 <Send className="size-4 text-white" strokeWidth={2} />
               )}
             </button>
+            </div>
           </div>
         </DrawerContent>
       </Drawer>
