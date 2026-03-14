@@ -13,17 +13,18 @@ import {
   Plus,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
+import { ActivityResponse } from "@stream-io/feeds-client";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type StreamActor =
   | string
   | {
-      id: string;
-      name?: string;
-      image?: string;
-      custom?: Record<string, string>;
-    };
+    id: string;
+    name?: string;
+    image?: string;
+    custom?: Record<string, string>;
+  };
 
 type PostActivity = {
   id: string;
@@ -89,20 +90,20 @@ function PostCard({
   onToggleLike,
   onToggleBookmark,
 }: {
-  activity: PostActivity;
+  activity: ActivityResponse;
   liked: boolean;
   bookmarked: boolean;
   onToggleLike: () => void;
   onToggleBookmark: () => void;
 }) {
-  const { username, fullName, avatar, id: actorId } = getActorInfo(activity.actor);
+  const { username, fullName, avatar, id: actorId } = getActorInfo(activity.user);
   const caption = activity.custom?.caption ?? activity.text ?? "";
   const image = activity.attachments?.[0]?.image_url;
-  const likeCount = (activity.reaction_counts?.like ?? 0) + (liked ? 1 : 0);
-  const commentCount = activity.reaction_counts?.comment ?? 0;
+  const likeCount = (activity.reaction_count ?? 0) + (liked ? 1 : 0);
+  const commentCount = activity.comment_count ?? 0;
   const hashtags = caption.match(/#\w+/g) ?? [];
   const captionText = caption.replace(/#\w+/g, "").trim();
-  const dateStr = activity.created_at ?? activity.time;
+  const dateStr = activity.created_at;
 
   return (
     <div className="bg-white">
@@ -127,7 +128,7 @@ function PostCard({
             <p className="text-sm font-semibold text-gray-900 leading-tight">
               {fullName}
             </p>
-            <p className="text-[11px] text-gray-400">{timeAgo(dateStr)}</p>
+            <p className="text-[11px] text-gray-400">{timeAgo(dateStr?.toISOString() ?? "")}</p>
           </div>
         </div>
         <button className="p-1 -mr-1">
@@ -156,9 +157,8 @@ function PostCard({
             className="flex items-center gap-1.5 active:scale-90 transition-transform"
           >
             <Heart
-              className={`size-5 transition-colors ${
-                liked ? "fill-red-500 text-red-500" : "text-gray-600"
-              }`}
+              className={`size-5 transition-colors ${liked ? "fill-red-500 text-red-500" : "text-gray-600"
+                }`}
               strokeWidth={liked ? 0 : 1.8}
             />
             {likeCount > 0 && (
@@ -180,9 +180,8 @@ function PostCard({
           className="active:scale-90 transition-transform"
         >
           <Bookmark
-            className={`size-5 transition-colors ${
-              bookmarked ? "fill-gray-900 text-gray-900" : "text-gray-600"
-            }`}
+            className={`size-5 transition-colors ${bookmarked ? "fill-gray-900 text-gray-900" : "text-gray-600"
+              }`}
             strokeWidth={bookmarked ? 0 : 1.8}
           />
         </button>
@@ -199,7 +198,7 @@ function PostCard({
           )}
           {hashtags.length > 0 && (
             <div className="flex flex-wrap gap-1.5 mt-1.5">
-              {hashtags.map((tag, i) => (
+              {hashtags.map((tag: string, i: number) => (
                 <span key={i} className="text-sm text-blue-500 font-medium">
                   {tag}
                 </span>
@@ -270,7 +269,7 @@ function StoriesRow({ userAvatar }: { userAvatar?: string }) {
 
 export default function Home() {
   const { user, client } = useAuth();
-  const [activities, setActivities] = useState<PostActivity[]>([]);
+  const [activities, setActivities] = useState<ActivityResponse[]>([]);
   const [loading, setLoading] = useState(true);
   const [liked, setLiked] = useState<Record<string, boolean>>({});
   const [bookmarked, setBookmarked] = useState<Record<string, boolean>>({});
@@ -281,24 +280,30 @@ export default function Home() {
     try {
       // Timeline feed aggregates posts from people the user follows
       const feed = client.feed("timeline", user.id);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const result = await (feed as any).getActivities({
-        limit: 20,
-        withReactionCounts: true,
-        enrich: true,
-      });
-      setActivities(result?.activities ?? []);
+      // const result = await (feed as any).getActivities({
+      //   limit: 20,
+      //   withReactionCounts: true,
+      //   enrich: true,
+      // });
+      const response = await feed.getOrCreate({ watch: true, limit: 20 });
+      const activities = response.activities ?? [];
+      if (activities.length > 0) {
+        setActivities(activities);
+      } else {
+        throw new Error("No activities found");
+      }
     } catch {
       try {
         // Fall back to the user's own feed
         const feed = client.feed("user", user.id);
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const result = await (feed as any).getActivities({
-          limit: 20,
-          withReactionCounts: true,
-          enrich: true,
-        });
-        setActivities(result?.activities ?? []);
+        // const result = await (feed as any).getActivities({
+        //   limit: 20,
+        //   withReactionCounts: true,
+        //   enrich: true,
+        // });
+        const response = await feed.getOrCreate({ watch: true, limit: 20 });
+        const activities = response.activities ?? [];
+        setActivities(activities);
       } catch {
         setActivities([]);
       }

@@ -257,8 +257,8 @@ export default function ProfilePage() {
         const feed = client.feed("user", user.id);
         // Subscribe to WebSocket events for state updates
         const response = await feed.getOrCreate({ watch: true });
-        console.log("response")
-        console.log(response)
+        // console.log("response")
+        // console.log(response)
 
         setPosts(response.activities.map((activity) => ({
           id: activity.id,
