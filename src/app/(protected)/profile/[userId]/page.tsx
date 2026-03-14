@@ -101,9 +101,15 @@ export default function OtherUserProfilePage() {
     setFollowLoading(true);
     try {
       if (isFollowing) {
-        await client.unfollow({ source: `timeline:${currentUser.id}`, target: `user:${userId}` });
+        await Promise.all([
+          client.unfollow({ source: `timeline:${currentUser.id}`, target: `user:${userId}` }),
+          client.unfollow({ source: `stories:${currentUser.id}`, target: `story:${userId}` }),
+        ]);
       } else {
-        await client.follow({ source: `timeline:${currentUser.id}`, target: `user:${userId}` });
+        await Promise.all([
+          client.follow({ source: `timeline:${currentUser.id}`, target: `user:${userId}` }),
+          client.follow({ source: `stories:${currentUser.id}`, target: `story:${userId}` }),
+        ]);
       }
     } finally {
       setFollowLoading(false);

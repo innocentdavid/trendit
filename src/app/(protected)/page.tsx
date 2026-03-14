@@ -30,7 +30,7 @@ import {
   Feed,
 } from "@stream-io/feeds-client";
 import Link from "next/link";
-import { useActivityComments, useFeedActivities, useOwnFollowings } from "@stream-io/feeds-client/react-bindings";
+import { useActivityComments, useAggregatedActivities, useFeedActivities, useOwnFollowings } from "@stream-io/feeds-client/react-bindings";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -406,9 +406,15 @@ function PostCard({
     setFollowLoading(true);
     try {
       if (isFollowing) {
-        await client.unfollow({ source: `timeline:${user.id}`, target: `user:${actorId}` });
+        await Promise.all([
+          client.unfollow({ source: `timeline:${user.id}`, target: `user:${actorId}` }),
+          client.unfollow({ source: `stories:${user.id}`, target: `story:${actorId}` }),
+        ]);
       } else {
-        await client.follow({ source: `timeline:${user.id}`, target: `user:${actorId}` });
+        await Promise.all([
+          client.follow({ source: `timeline:${user.id}`, target: `user:${actorId}` }),
+          client.follow({ source: `stories:${user.id}`, target: `story:${actorId}` }),
+        ]);
       }
     } finally {
       setFollowLoading(false);
@@ -475,7 +481,7 @@ function PostCard({
 
   return (
     <>
-      <div className="bg-white">
+      <div className="bg-gray-50 border-b border-gray-200">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3">
           <Link href={isOwnPost ? "/profile" : `/profile/${actorId}`} className="flex items-center gap-3 min-w-0 flex-1">
@@ -506,18 +512,17 @@ function PostCard({
                 type="button"
                 onClick={toggleFollow}
                 disabled={followLoading}
-                className={`px-3 py-1.5 rounded-full text-xs font-semibold transition disabled:opacity-50 ${
-                  isFollowing
-                    ? "bg-gray-100 text-gray-700 hover:bg-gray-200"
-                    : "bg-purple-500 text-white hover:opacity-90"
-                }`}
+                className={`px-3 py-1.5 rounded-full text-xs font-semibold transition disabled:opacity-50 ${isFollowing
+                  ? "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                  : "bg-purple-500 text-white hover:opacity-90"
+                  }`}
               >
                 {followLoading ? "…" : isFollowing ? "Following" : "Follow"}
               </button>
             )}
-            <button className="p-1 -mr-1" type="button">
+            {/* <button className="p-1 -mr-1" type="button">
               <MoreHorizontal className="size-5 text-gray-400" />
-            </button>
+            </button> */}
           </div>
         </div>
 
@@ -729,15 +734,36 @@ function PostCard({
               </div>
             )}
             <div className="flex items-center gap-3">
-            <input
-              value={commentDraft}
-              onChange={(e) => setCommentDraft(e.target.value)}
-              onKeyDown={async (e) => {
-                if (
-                  e.key === "Enter" &&
-                  commentDraft.trim() &&
-                  !isSubmittingComment
-                ) {
+              <input
+                value={commentDraft}
+                onChange={(e) => setCommentDraft(e.target.value)}
+                onKeyDown={async (e) => {
+                  if (
+                    e.key === "Enter" &&
+                    commentDraft.trim() &&
+                    !isSubmittingComment
+                  ) {
+                    setIsSubmittingComment(true);
+                    await addComment(
+                      activity.id,
+                      commentDraft.trim(),
+                      replyingToComment?.id
+                    );
+                    setCommentDraft("");
+                    setReplyingToComment(null);
+                    setIsSubmittingComment(false);
+                  }
+                }}
+                placeholder={
+                  replyingToComment
+                    ? `Reply to @${replyingToComment.username}…`
+                    : "Add a comment…"
+                }
+                className="flex-1 text-sm bg-gray-50 rounded-full px-4 py-2 outline-none focus:ring-2 focus:ring-purple-200 placeholder:text-gray-400"
+              />
+              <button
+                disabled={!commentDraft.trim() || isSubmittingComment}
+                onClick={async () => {
                   setIsSubmittingComment(true);
                   await addComment(
                     activity.id,
@@ -747,36 +773,15 @@ function PostCard({
                   setCommentDraft("");
                   setReplyingToComment(null);
                   setIsSubmittingComment(false);
-                }
-              }}
-              placeholder={
-                replyingToComment
-                  ? `Reply to @${replyingToComment.username}…`
-                  : "Add a comment…"
-              }
-              className="flex-1 text-sm bg-gray-50 rounded-full px-4 py-2 outline-none focus:ring-2 focus:ring-purple-200 placeholder:text-gray-400"
-            />
-            <button
-              disabled={!commentDraft.trim() || isSubmittingComment}
-              onClick={async () => {
-                setIsSubmittingComment(true);
-                await addComment(
-                  activity.id,
-                  commentDraft.trim(),
-                  replyingToComment?.id
-                );
-                setCommentDraft("");
-                setReplyingToComment(null);
-                setIsSubmittingComment(false);
-              }}
-              className="shrink-0 w-9 h-9 rounded-full bg-purple-500 flex items-center justify-center disabled:opacity-40 active:scale-90 transition-transform"
-            >
-              {isSubmittingComment ? (
-                <div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-              ) : (
-                <Send className="size-4 text-white" strokeWidth={2} />
-              )}
-            </button>
+                }}
+                className="shrink-0 w-9 h-9 rounded-full bg-purple-500 flex items-center justify-center disabled:opacity-40 active:scale-90 transition-transform"
+              >
+                {isSubmittingComment ? (
+                  <div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                ) : (
+                  <Send className="size-4 text-white" strokeWidth={2} />
+                )}
+              </button>
             </div>
           </div>
         </DrawerContent>
@@ -787,54 +792,95 @@ function PostCard({
 
 // ─── Stories ──────────────────────────────────────────────────────────────────
 
-const PLACEHOLDER_STORIES = [
-  { id: "1", username: "Alex ROV" },
-  { id: "2", username: "Alex ROV" },
-  { id: "3", username: "Alex ROV" },
-  { id: "4", username: "Alex ROV" },
-];
+type StoryGroup = {
+  id?: string;
+  activities?: Array<{ id: string; user?: StreamActor }>;
+  is_watched?: boolean;
+};
 
-function StoriesRow({ userAvatar }: { userAvatar?: string }) {
+function StoriesRow({
+  userAvatar,
+  currentUserId,
+  myStoryCount,
+  aggregatedGroups,
+}: {
+  userAvatar?: string;
+  currentUserId: string | undefined;
+  myStoryCount: number;
+  aggregatedGroups: StoryGroup[];
+}) {
   return (
     <div className="flex gap-3 px-4 py-3 overflow-x-auto scrollbar-hide border-b border-gray-100 shrink-0">
       {/* Your Story */}
-      <div className="flex flex-col items-center gap-1 shrink-0">
+      <Link
+        href={myStoryCount > 0 ? `/stories?userId=${currentUserId}` : "/create?type=story"}
+        className="flex flex-col items-center gap-1 shrink-0"
+      >
         <div className="relative">
-          <div className="w-14 h-14 rounded-full overflow-hidden bg-gray-100 border-2 border-gray-200">
-            {userAvatar ? (
-              <Image
-                src={userAvatar}
-                alt="Your story"
-                fill
-                className="object-cover"
-                unoptimized
-              />
-            ) : (
-              <div className="w-full h-full bg-linear-to-br from-gray-200 to-gray-300" />
-            )}
+          <div
+            className={`w-14 h-14 rounded-full overflow-hidden border-2 shrink-0 ${myStoryCount > 0
+              ? "border-transparent bg-linear-to-br from-blue-400 to-purple-600 p-0.5"
+              : "border-gray-200 bg-gray-100"
+              }`}
+          >
+            <div className="w-full h-full rounded-full overflow-hidden border-2 border-white bg-gray-200 relative">
+              {userAvatar ? (
+                <Image
+                  src={userAvatar}
+                  alt="Your story"
+                  fill
+                  className="object-cover"
+                  unoptimized
+                />
+              ) : (
+                <div className="w-full h-full bg-linear-to-br from-gray-200 to-gray-300" />
+              )}
+            </div>
           </div>
-          <div className="absolute -bottom-0.5 -right-0.5 w-5 h-5 rounded-full bg-blue-500 border-2 border-white flex items-center justify-center">
-            <Plus className="size-3 text-white" strokeWidth={3} />
-          </div>
+          {myStoryCount === 0 && (
+            <div className="absolute -bottom-0.5 -right-0.5 w-5 h-5 rounded-full bg-blue-500 border-2 border-white flex items-center justify-center">
+              <Plus className="size-3 text-white" strokeWidth={3} />
+            </div>
+          )}
         </div>
         <span className="text-[10px] text-gray-500 w-14 text-center truncate">
           Your Story
         </span>
-      </div>
+      </Link>
 
-      {/* Other stories */}
-      {PLACEHOLDER_STORIES.map((story, i) => (
-        <div key={story.id} className="flex flex-col items-center gap-1 shrink-0">
-          <div className="w-14 h-14 rounded-full p-0.5 bg-linear-to-br from-blue-400 to-purple-600">
-            <div className="w-full h-full rounded-full overflow-hidden border-2 border-white bg-gray-800">
-              <AvatarPlaceholder seed={i + 1} />
+      {/* Other users' stories */}
+      {aggregatedGroups.map((group) => {
+        const firstActivity = group.activities?.[0];
+        const actor = firstActivity?.user;
+        const { id: authorId, username } = getActorInfo(actor ?? "");
+        const hasUnwatched = !group.is_watched;
+        return (
+          <Link
+            key={group.id ?? authorId ?? firstActivity?.id ?? "g"}
+            href={`/stories?userId=${encodeURIComponent(authorId)}`}
+            className="flex flex-col items-center gap-1 shrink-0"
+          >
+            <div className="w-14 h-14 rounded-full p-0.5 bg-linear-to-br from-blue-400 to-purple-600">
+              <div className="w-full h-full rounded-full overflow-hidden border-2 border-white bg-gray-800 relative">
+                {getActorInfo(actor ?? "").avatar ? (
+                  <Image
+                    src={getActorInfo(actor ?? "").avatar!}
+                    alt={username}
+                    fill
+                    className="object-cover"
+                    unoptimized
+                  />
+                ) : (
+                  <AvatarPlaceholder seed={authorId ?? 0} />
+                )}
+              </div>
             </div>
-          </div>
-          <span className="text-[10px] text-gray-500 w-14 text-center truncate">
-            {story.username}
-          </span>
-        </div>
-      ))}
+            <span className="text-[10px] text-gray-500 w-14 text-center truncate">
+              {username}
+            </span>
+          </Link>
+        );
+      })}
     </div>
   );
 }
@@ -845,7 +891,11 @@ export default function Home() {
   const { user, client } = useAuth();
   const [loading, setLoading] = useState(true);
   const [feed, setFeed] = useState<Feed | undefined>(undefined);
+  const [storiesFeed, setStoriesFeed] = useState<Feed | undefined>(undefined);
+  const [myStoryFeed, setMyStoryFeed] = useState<Feed | undefined>(undefined);
   const { activities, loadNextPage, has_next_page, is_loading } = useFeedActivities(feed);
+  const { aggregated_activities: aggregatedStoryGroups = [] } = useAggregatedActivities(storiesFeed) ?? {};
+  const { activities: myStoryActivities = [] } = useFeedActivities(myStoryFeed) ?? {};
   const limit = 2;
 
   const fetchFeed = useCallback(async () => {
@@ -886,6 +936,14 @@ export default function Home() {
     fetchFeed();
   }, [fetchFeed]);
 
+  useEffect(() => {
+    if (!client || !user) return;
+    const sf = client.feed("stories", user.id);
+    sf.getOrCreate({ watch: true }).then(() => setStoriesFeed(sf)).catch(() => { });
+    const mf = client.feed("story", user.id);
+    mf.getOrCreate({ watch: true }).then(() => setMyStoryFeed(mf)).catch(() => { });
+  }, [client, user?.id]);
+
   const userAvatar = user?.user_metadata?.avatar_url as string | undefined;
 
   return (
@@ -913,7 +971,12 @@ export default function Home() {
 
       {/* Scrollable body */}
       <div className="flex-1 overflow-y-auto pb-20 scrollbar-hide">
-        <StoriesRow userAvatar={userAvatar} />
+        <StoriesRow
+          userAvatar={userAvatar}
+          currentUserId={user?.id}
+          myStoryCount={myStoryActivities.length}
+          aggregatedGroups={aggregatedStoryGroups as StoryGroup[]}
+        />
 
         {/* Feed */}
         <div className="divide-y divide-gray-100">

@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import Image from "next/image";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   Bell,
   MessageCircle,
@@ -20,7 +20,7 @@ import { supabase } from "@/utils/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { ActivityRequest } from "@stream-io/feeds-client";
 
-type PostType = "image" | "video" | "text" | "reel";
+type PostType = "image" | "video" | "text" | "reel" | "story";
 
 const CAPTION_MAX = 200;
 const REEL_VIDEO_MAX_MB = 100;
@@ -38,14 +38,18 @@ const postTypes: {
     { id: "video", label: "Video", icon: Video, border: "border-purple-500", iconColor: "text-purple-500" },
     { id: "text", label: "Text", icon: Type, border: "border-orange-400", iconColor: "text-orange-400" },
     { id: "reel", label: "Reel", icon: Video, border: "border-pink-500", iconColor: "text-pink-500" },
+    { id: "story", label: "Story", icon: ImageIcon, border: "border-amber-400", iconColor: "text-amber-500" },
   ];
 
 export default function CreatePage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { user, client } = useAuth();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const [postType, setPostType] = useState<PostType>("image");
+  const [postType, setPostType] = useState<PostType>(() =>
+    searchParams.get("type") === "story" ? "story" : "image"
+  );
   const [caption, setCaption] = useState("");
   const [mediaFile, setMediaFile] = useState<File | null>(null);
   const [mediaPreview, setMediaPreview] = useState<string | null>(null);
@@ -117,6 +121,10 @@ export default function CreatePage() {
       setError("Reels require a video.");
       return;
     }
+    if (postType === "story" && !mediaFile) {
+      setError("Stories require a photo or video.");
+      return;
+    }
     setSharing(true);
     setError(null);
     try {
@@ -126,6 +134,9 @@ export default function CreatePage() {
         if (postType === "reel") {
           const err = validateReelVideo(mediaFile);
           if (err) throw new Error(err);
+        }
+        if (postType === "story" && !mediaFile.type.startsWith("image/") && !mediaFile.type.startsWith("video/")) {
+          throw new Error("Stories must be an image or video.");
         }
         const ext = mediaFile.name.split(".").pop();
         const path = `trendit_posts/${user.id}/${Date.now()}.${ext}`;
@@ -138,9 +149,37 @@ export default function CreatePage() {
       }
 
       const isReel = postType === "reel";
+      const isStory = postType === "story";
       const topicTags = reelTopicTags
         ? reelTopicTags.split(/[\s,#]+/).filter(Boolean).slice(0, 10)
         : undefined;
+
+      if (isStory) {
+        const tomorrow = new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        const storyFeed = client.feed("story", user.id);
+        await storyFeed.getOrCreate();
+        const storyPayload: Omit<ActivityRequest, "feeds"> = {
+          type: "post",
+          text: caption || undefined,
+          custom: { content_type: "story", ...(caption && { caption }) },
+          expires_at: tomorrow.toISOString(),
+          create_notification_activity: false,
+          mentioned_user_ids: [],
+          restrict_replies: undefined,
+        };
+        if (mediaUrl) {
+          storyPayload.attachments = [{
+            type: mediaFile!.type.startsWith("video/") ? "video" : "image",
+            image_url: mediaUrl,
+            custom: {},
+          }];
+        }
+        const response = await storyFeed.addActivity(storyPayload);
+        if (!response?.activity) throw new Error("Failed to create story.");
+        router.push("/");
+        return;
+      }
 
       const createPostPayload: Omit<ActivityRequest, "feeds"> = isReel
         ? {
@@ -191,7 +230,11 @@ export default function CreatePage() {
   };
 
   const acceptAttr =
-    postType === "video" || postType === "reel" ? "video/*" : "image/*";
+    postType === "story"
+      ? "image/*,video/*"
+      : postType === "video" || postType === "reel"
+        ? "video/*"
+        : "image/*";
 
   return (
     <div className="flex flex-col h-screen bg-white">
@@ -243,6 +286,7 @@ export default function CreatePage() {
                   setReelAudioArtist("");
                   setReelTopicTags("");
                 }
+                if (id !== "story") setError(null);
               }}
               className={`flex flex-col items-center justify-center gap-2 py-5 rounded-2xl border-2 transition ${postType === id ? border + " bg-white shadow-sm" : "border-gray-200 bg-gray-50"
                 }`}
@@ -267,6 +311,13 @@ export default function CreatePage() {
           </p>
         )}
 
+        {/* Story hint */}
+        {postType === "story" && (
+          <p className="text-xs text-gray-500 mb-2">
+            Stories disappear after 24 hours. Add a photo or video.
+          </p>
+        )}
+
         {/* Upload area (hidden for text posts) */}
         {postType !== "text" && (
           <div
@@ -278,7 +329,7 @@ export default function CreatePage() {
           >
             {mediaPreview ? (
               <>
-                {postType === "image" ? (
+                {mediaFile?.type.startsWith("image/") ? (
                   <Image
                     src={mediaPreview}
                     alt="Preview"
@@ -385,7 +436,8 @@ export default function CreatePage() {
           disabled={
             sharing ||
             (postType !== "text" && !mediaFile) ||
-            (postType === "reel" && !mediaFile)
+            (postType === "reel" && !mediaFile) ||
+            (postType === "story" && !mediaFile)
           }
           className="w-full mt-3 py-3.5 rounded-full bg-linear-to-r from-blue-500 to-purple-600 text-white font-bold text-sm shadow-md hover:opacity-90 active:scale-[0.98] transition disabled:opacity-50"
         >
