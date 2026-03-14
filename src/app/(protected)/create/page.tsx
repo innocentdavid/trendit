@@ -20,9 +20,12 @@ import { supabase } from "@/utils/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { ActivityRequest } from "@stream-io/feeds-client";
 
-type PostType = "image" | "video" | "text";
+type PostType = "image" | "video" | "text" | "reel";
 
 const CAPTION_MAX = 200;
+const REEL_VIDEO_MAX_MB = 100;
+const REEL_VIDEO_MAX_BYTES = REEL_VIDEO_MAX_MB * 1024 * 1024;
+const REEL_VIDEO_TYPES = ["video/mp4", "video/quicktime", "video/webm"];
 
 const postTypes: {
   id: PostType;
@@ -34,6 +37,7 @@ const postTypes: {
     { id: "image", label: "Image", icon: ImageIcon, border: "border-cyan-400", iconColor: "text-cyan-500" },
     { id: "video", label: "Video", icon: Video, border: "border-purple-500", iconColor: "text-purple-500" },
     { id: "text", label: "Text", icon: Type, border: "border-orange-400", iconColor: "text-orange-400" },
+    { id: "reel", label: "Reel", icon: Video, border: "border-pink-500", iconColor: "text-pink-500" },
   ];
 
 export default function CreatePage() {
@@ -48,6 +52,9 @@ export default function CreatePage() {
   const [sharing, setSharing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [location, setLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [reelAudioTitle, setReelAudioTitle] = useState("");
+  const [reelAudioArtist, setReelAudioArtist] = useState("");
+  const [reelTopicTags, setReelTopicTags] = useState("");
 
   useEffect(() => {
     if (!navigator.geolocation) return;
@@ -57,9 +64,27 @@ export default function CreatePage() {
     );
   }, []);
 
+  const validateReelVideo = (file: File): string | null => {
+    if (!REEL_VIDEO_TYPES.includes(file.type) && !file.type.startsWith("video/")) {
+      return "Reels must be a video (MP4, MOV, or WebM).";
+    }
+    if (file.size > REEL_VIDEO_MAX_BYTES) {
+      return `Video must be under ${REEL_VIDEO_MAX_MB}MB.`;
+    }
+    return null;
+  };
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    setError(null);
+    if (postType === "reel") {
+      const err = validateReelVideo(file);
+      if (err) {
+        setError(err);
+        return;
+      }
+    }
     setMediaFile(file);
     setMediaPreview(URL.createObjectURL(file));
   };
@@ -68,6 +93,14 @@ export default function CreatePage() {
     e.preventDefault();
     const file = e.dataTransfer.files?.[0];
     if (!file) return;
+    setError(null);
+    if (postType === "reel") {
+      const err = validateReelVideo(file);
+      if (err) {
+        setError(err);
+        return;
+      }
+    }
     setMediaFile(file);
     setMediaPreview(URL.createObjectURL(file));
   };
@@ -80,12 +113,20 @@ export default function CreatePage() {
 
   const handleShare = async () => {
     if (!user || !client) return console.log("User or client not found", { user, client });
+    if (postType === "reel" && !mediaFile) {
+      setError("Reels require a video.");
+      return;
+    }
     setSharing(true);
     setError(null);
     try {
       let mediaUrl: string | null = null;
 
       if (mediaFile) {
+        if (postType === "reel") {
+          const err = validateReelVideo(mediaFile);
+          if (err) throw new Error(err);
+        }
         const ext = mediaFile.name.split(".").pop();
         const path = `trendit_posts/${user.id}/${Date.now()}.${ext}`;
         const { error: uploadError } = await supabase.storage
@@ -96,38 +137,52 @@ export default function CreatePage() {
         mediaUrl = data.publicUrl;
       }
 
-      const createPostPayload: Omit<ActivityRequest, "feeds"> = {
-        type: "post",
-        text: caption,
-        custom: { caption },
-        create_notification_activity: true,
-        copy_custom_to_notification: true,
-        ...(location && { location }),
-        mentioned_user_ids: [],
-        restrict_replies: undefined,
-      }
+      const isReel = postType === "reel";
+      const topicTags = reelTopicTags
+        ? reelTopicTags.split(/[\s,#]+/).filter(Boolean).slice(0, 10)
+        : undefined;
+
+      const createPostPayload: Omit<ActivityRequest, "feeds"> = isReel
+        ? {
+            type: "reel",
+            text: caption,
+            custom: {
+              content_type: "reel",
+              caption,
+              ...(reelAudioTitle && { audio_title: reelAudioTitle }),
+              ...(reelAudioArtist && { audio_artist: reelAudioArtist }),
+              ...(topicTags?.length && { topic_tags: topicTags }),
+              duration_bucket: "short",
+            },
+            create_notification_activity: true,
+            copy_custom_to_notification: true,
+            mentioned_user_ids: [],
+            restrict_replies: undefined,
+          }
+        : {
+            type: "post",
+            text: caption,
+            custom: { caption },
+            create_notification_activity: true,
+            copy_custom_to_notification: true,
+            ...(location && { location }),
+            mentioned_user_ids: [],
+            restrict_replies: undefined,
+          };
 
       if (mediaUrl) {
         createPostPayload.attachments = [{
-          type: postType,
+          type: isReel ? "video" : postType,
           image_url: mediaUrl,
-          custom: {}
+          custom: isReel ? { content_type: "reel" } : {},
         }];
       }
 
       const feed = client.feed("user", user.id);
       const response = await feed.addActivity(createPostPayload);
 
-      // const { error: insertError } = await supabase.from("trendit_posts").insert({
-      //   user_id: user.id,
-      //   type: postType,
-      //   caption,
-      //   media_url: mediaUrl,
-      // });
-
-      // if (insertError) throw insertError;
       if (!response || !response.activity) throw new Error("Failed to create post.");
-      router.push("/");
+      router.push(isReel ? "/reels" : "/");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to share post.");
     } finally {
@@ -135,7 +190,8 @@ export default function CreatePage() {
     }
   };
 
-  const acceptAttr = postType === "video" ? "video/*" : "image/*";
+  const acceptAttr =
+    postType === "video" || postType === "reel" ? "video/*" : "image/*";
 
   return (
     <div className="flex flex-col h-screen bg-white">
@@ -179,7 +235,15 @@ export default function CreatePage() {
           {postTypes.map(({ id, label, icon: Icon, border, iconColor }) => (
             <button
               key={id}
-              onClick={() => { setPostType(id); clearMedia(); }}
+              onClick={() => {
+                setPostType(id);
+                clearMedia();
+                if (id !== "reel") {
+                  setReelAudioTitle("");
+                  setReelAudioArtist("");
+                  setReelTopicTags("");
+                }
+              }}
               className={`flex flex-col items-center justify-center gap-2 py-5 rounded-2xl border-2 transition ${postType === id ? border + " bg-white shadow-sm" : "border-gray-200 bg-gray-50"
                 }`}
             >
@@ -195,6 +259,13 @@ export default function CreatePage() {
             </button>
           ))}
         </div>
+
+        {/* Reel-only hint */}
+        {postType === "reel" && (
+          <p className="text-xs text-gray-500 mb-2">
+            Reels are short videos. Add optional music credits and tags below.
+          </p>
+        )}
 
         {/* Upload area (hidden for text posts) */}
         {postType !== "text" && (
@@ -248,6 +319,39 @@ export default function CreatePage() {
           </div>
         )}
 
+        {/* Reel metadata (audio / tags) */}
+        {postType === "reel" && (
+          <div className="space-y-3 mb-4">
+            <div className="rounded-2xl bg-gray-50 border border-gray-200 overflow-hidden">
+              <input
+                type="text"
+                value={reelAudioTitle}
+                onChange={(e) => setReelAudioTitle(e.target.value)}
+                placeholder="Music / audio title (optional)"
+                className="w-full bg-transparent px-4 py-3 text-sm text-gray-800 placeholder-gray-400 outline-none"
+              />
+            </div>
+            <div className="rounded-2xl bg-gray-50 border border-gray-200 overflow-hidden">
+              <input
+                type="text"
+                value={reelAudioArtist}
+                onChange={(e) => setReelAudioArtist(e.target.value)}
+                placeholder="Artist (optional)"
+                className="w-full bg-transparent px-4 py-3 text-sm text-gray-800 placeholder-gray-400 outline-none"
+              />
+            </div>
+            <div className="rounded-2xl bg-gray-50 border border-gray-200 overflow-hidden">
+              <input
+                type="text"
+                value={reelTopicTags}
+                onChange={(e) => setReelTopicTags(e.target.value)}
+                placeholder="Tags (e.g. #dance #vlog)"
+                className="w-full bg-transparent px-4 py-3 text-sm text-gray-800 placeholder-gray-400 outline-none"
+              />
+            </div>
+          </div>
+        )}
+
         {/* Caption */}
         <div className="rounded-2xl bg-gray-50 border border-gray-200 overflow-hidden mb-2">
           <textarea
@@ -278,7 +382,11 @@ export default function CreatePage() {
       <div className="fixed bottom-16 left-1/2 -translate-x-1/2 w-full max-w-sm px-4 pb-3 bg-white/90 backdrop-blur-sm border-t border-gray-100">
         <button
           onClick={handleShare}
-          disabled={sharing || (postType !== "text" && !mediaFile)}
+          disabled={
+            sharing ||
+            (postType !== "text" && !mediaFile) ||
+            (postType === "reel" && !mediaFile)
+          }
           className="w-full mt-3 py-3.5 rounded-full bg-linear-to-r from-blue-500 to-purple-600 text-white font-bold text-sm shadow-md hover:opacity-90 active:scale-[0.98] transition disabled:opacity-50"
         >
           {sharing ? "Sharing…" : "Share Post"}
