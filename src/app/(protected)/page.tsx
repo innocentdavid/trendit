@@ -11,9 +11,17 @@ import {
   Bookmark,
   MoreHorizontal,
   Plus,
+  Send,
 } from "lucide-react";
+import {
+  Drawer,
+  DrawerContent,
+  DrawerHeader,
+  DrawerTitle,
+} from "@/components/ui/drawer";
 import { useAuth } from "@/contexts/AuthContext";
-import { ActivityResponse } from "@stream-io/feeds-client";
+import { ActivityResponse, Feed } from "@stream-io/feeds-client";
+import { useActivityComments, useFeedActivities } from "@stream-io/feeds-client/react-bindings";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -25,17 +33,6 @@ type StreamActor =
     image?: string;
     custom?: Record<string, string>;
   };
-
-type PostActivity = {
-  id: string;
-  actor: StreamActor;
-  text?: string;
-  custom?: { caption?: string };
-  attachments?: Array<{ type: string; image_url?: string }>;
-  created_at?: string;
-  time?: string;
-  reaction_counts?: { like?: number; comment?: number };
-};
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -84,130 +81,275 @@ function AvatarPlaceholder({ seed }: { seed: string | number }) {
 // ─── Post Card ────────────────────────────────────────────────────────────────
 
 function PostCard({
+  feed,
   activity,
-  liked,
-  bookmarked,
-  onToggleLike,
-  onToggleBookmark,
 }: {
+  feed: Feed | undefined;
   activity: ActivityResponse;
-  liked: boolean;
-  bookmarked: boolean;
-  onToggleLike: () => void;
-  onToggleBookmark: () => void;
 }) {
+  const { user, client } = useAuth();
   const { username, fullName, avatar, id: actorId } = getActorInfo(activity.user);
   const caption = activity.custom?.caption ?? activity.text ?? "";
   const image = activity.attachments?.[0]?.image_url;
-  const likeCount = (activity.reaction_count ?? 0) + (liked ? 1 : 0);
+  const likeCount = (activity.reaction_count ?? 0);
   const commentCount = activity.comment_count ?? 0;
   const hashtags = caption.match(/#\w+/g) ?? [];
   const captionText = caption.replace(/#\w+/g, "").trim();
   const dateStr = activity.created_at;
+  const [commentsOpen, setCommentsOpen] = useState(false);
+  const [commentDraft, setCommentDraft] = useState("");
+  const [isSubmittingComment, setIsSubmittingComment] = useState(false);
+  const {
+    comments,
+    has_next_page,
+    is_loading_next_page,
+    loadNextPage,
+  } = useActivityComments({ feed, parentComment: undefined, activity });
+  const hasLiked = !!activity.own_reactions?.filter((reaction) => (reaction.activity_id === activity.id && reaction.user.id === user?.id))[0];
+  const hasBookmarked = !!activity.own_bookmarks?.filter((bookmark) => (bookmark.activity?.id === activity.id && bookmark.user?.id === user?.id))[0];
+  // console.log({ caption: activity.text, hasLiked, activity, comments });
+  // console.log({ caption: activity.text, comments, has_next_page });
+
+  useEffect(() => {
+    if (!client) return;
+    loadNextPage()
+  }, [])
+
+
+  async function toggleActivityReaction(activity_id: string, reaction_type: "like" | "dislike") {
+    if (!client || !activity_id) return;
+    await (reaction_type === "like" ? client.addActivityReaction : client.deleteActivityReaction)({
+      activity_id: activity_id,
+      type: "like",
+      ...(reaction_type === "like" ? {
+        custom: {
+          emoji: "❤️",
+        }
+      } : {}),
+    });
+  }
+
+  async function addComment(activity_id: string, comment: string) {
+    if (!client || !activity_id || !comment) return;
+    await client.addComment({
+      comment,
+      object_id: activity_id,
+      object_type: "activity",
+    });
+  }
+
+  async function addBookmark(activity_id: string) {
+    if (!client || !activity_id) return;
+    await client.addBookmark({
+      activity_id: activity_id,
+    });
+  }
 
   return (
-    <div className="bg-white">
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-full overflow-hidden bg-gray-200 shrink-0">
-            {avatar ? (
-              <Image
-                src={avatar}
-                alt={username}
-                width={36}
-                height={36}
-                className="object-cover w-full h-full"
-                unoptimized
-              />
-            ) : (
-              <AvatarPlaceholder seed={actorId} />
-            )}
-          </div>
-          <div>
-            <p className="text-sm font-semibold text-gray-900 leading-tight">
-              {fullName}
-            </p>
-            <p className="text-[11px] text-gray-400">{timeAgo(dateStr?.toISOString() ?? "")}</p>
-          </div>
-        </div>
-        <button className="p-1 -mr-1">
-          <MoreHorizontal className="size-5 text-gray-400" />
-        </button>
-      </div>
-
-      {/* Media */}
-      {image && (
-        <div className="mx-4 rounded-2xl overflow-hidden aspect-square relative bg-gray-100">
-          <Image
-            src={image}
-            alt="Post media"
-            fill
-            className="object-cover"
-            unoptimized
-          />
-        </div>
-      )}
-
-      {/* Actions */}
-      <div className="flex items-center justify-between px-4 py-2.5">
-        <div className="flex items-center gap-5">
-          <button
-            onClick={onToggleLike}
-            className="flex items-center gap-1.5 active:scale-90 transition-transform"
-          >
-            <Heart
-              className={`size-5 transition-colors ${liked ? "fill-red-500 text-red-500" : "text-gray-600"
-                }`}
-              strokeWidth={liked ? 0 : 1.8}
-            />
-            {likeCount > 0 && (
-              <span className="text-sm text-gray-600">{likeCount}</span>
-            )}
-          </button>
-          <button className="flex items-center gap-1.5">
-            <CommentIcon className="size-5 text-gray-600" strokeWidth={1.8} />
-            {commentCount > 0 && (
-              <span className="text-sm text-gray-600">{commentCount}</span>
-            )}
-          </button>
-          <button className="active:scale-90 transition-transform">
-            <Share2 className="size-5 text-gray-600" strokeWidth={1.8} />
-          </button>
-        </div>
-        <button
-          onClick={onToggleBookmark}
-          className="active:scale-90 transition-transform"
-        >
-          <Bookmark
-            className={`size-5 transition-colors ${bookmarked ? "fill-gray-900 text-gray-900" : "text-gray-600"
-              }`}
-            strokeWidth={bookmarked ? 0 : 1.8}
-          />
-        </button>
-      </div>
-
-      {/* Caption + hashtags */}
-      {(captionText || hashtags.length > 0) && (
-        <div className="px-4 pb-4">
-          {captionText && (
-            <p className="text-sm text-gray-800 leading-snug">
-              <span className="font-semibold">@{username}</span>{" "}
-              {captionText}
-            </p>
-          )}
-          {hashtags.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 mt-1.5">
-              {hashtags.map((tag: string, i: number) => (
-                <span key={i} className="text-sm text-blue-500 font-medium">
-                  {tag}
-                </span>
-              ))}
+    <>
+      <div className="bg-white">
+        {/* Header */}
+        <div className="flex items-center justify-between px-4 py-3">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-full overflow-hidden bg-gray-200 shrink-0">
+              {avatar ? (
+                <Image
+                  src={avatar}
+                  alt={username}
+                  width={36}
+                  height={36}
+                  className="object-cover w-full h-full"
+                  unoptimized
+                />
+              ) : (
+                <AvatarPlaceholder seed={actorId} />
+              )}
             </div>
-          )}
+            <div>
+              <p className="text-sm font-semibold text-gray-900 leading-tight">
+                {fullName}
+              </p>
+              <p className="text-[11px] text-gray-400">{timeAgo(dateStr?.toISOString() ?? "")}</p>
+            </div>
+          </div>
+          <button className="p-1 -mr-1">
+            <MoreHorizontal className="size-5 text-gray-400" />
+          </button>
         </div>
-      )}
-    </div>
+
+        {/* Media */}
+        {image && (
+          <div className="mx-4 rounded-2xl overflow-hidden aspect-square relative bg-gray-100">
+            <Image
+              src={image}
+              alt="Post media"
+              fill
+              className="object-cover"
+              unoptimized
+            />
+          </div>
+        )}
+
+        {/* Actions */}
+        <div className="flex items-center justify-between px-4 py-2.5">
+          <div className="flex items-center gap-5">
+            <button
+              onClick={() => toggleActivityReaction(activity.id, hasLiked ? "dislike" : "like")}
+              className="flex items-center gap-1.5 active:scale-90 transition-transform"
+            >
+              <Heart
+                className={`size-5 transition-colors ${hasLiked ? "fill-red-500 text-red-500" : "text-gray-600"
+                  }`}
+                strokeWidth={hasLiked ? 0 : 1.8}
+              />
+              {likeCount > 0 && (
+                <span className="text-sm text-gray-600">{likeCount}</span>
+              )}
+            </button>
+            <button
+              onClick={() => setCommentsOpen(true)}
+              className="flex items-center gap-1.5 active:scale-90 transition-transform"
+            >
+              <CommentIcon className="size-5 text-gray-600" strokeWidth={1.8} />
+              {commentCount > 0 && (
+                <span className="text-sm text-gray-600">{commentCount}</span>
+              )}
+            </button>
+            <button className="active:scale-90 transition-transform">
+              <Share2 className="size-5 text-gray-600" strokeWidth={1.8} />
+            </button>
+          </div>
+          <button
+            onClick={() => addBookmark(activity.id)}
+            className="active:scale-90 transition-transform"
+          >
+            <Bookmark
+              className={`size-5 transition-colors ${hasBookmarked ? "fill-gray-900 text-gray-900" : "text-gray-600"
+                }`}
+              strokeWidth={hasBookmarked ? 0 : 1.8}
+            />
+          </button>
+        </div>
+
+        {/* Caption + hashtags */}
+        {(captionText || hashtags.length > 0) && (
+          <div className="px-4 pb-4">
+            {captionText && (
+              <p className="text-sm text-gray-800 leading-snug">
+                <span className="font-semibold">@{username}</span>{" "}
+                {captionText}
+              </p>
+            )}
+            {hashtags.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 mt-1.5">
+                {hashtags.map((tag: string, i: number) => (
+                  <span key={i} className="text-sm text-blue-500 font-medium">
+                    {tag}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Comments Drawer */}
+      <Drawer open={commentsOpen} onOpenChange={setCommentsOpen}>
+        <DrawerContent className="flex flex-col max-h-[75vh]">
+          <DrawerHeader className="border-b border-gray-100 pb-3">
+            <DrawerTitle className="text-base font-semibold text-gray-900">
+              Comments{commentCount > 0 && (
+                <span className="text-gray-400 font-normal ml-1">({commentCount})</span>
+              )}
+            </DrawerTitle>
+          </DrawerHeader>
+
+          {/* Comment list */}
+          <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
+            {(comments ?? []).length === 0 ? (
+              <p className="text-center text-sm text-gray-400 py-8">
+                No comments yet. Be the first!
+              </p>
+            ) : (
+              (comments ?? []).map((comment) => {
+                const actor = getActorInfo(comment.user);
+                return (
+                  <div key={comment.id} className="flex gap-3">
+                    <div className="w-8 h-8 rounded-full overflow-hidden bg-gray-200 shrink-0">
+                      {actor.avatar ? (
+                        <Image
+                          src={actor.avatar}
+                          alt={actor.username}
+                          width={32}
+                          height={32}
+                          className="object-cover w-full h-full"
+                          unoptimized
+                        />
+                      ) : (
+                        <AvatarPlaceholder seed={actor.id} />
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm text-gray-800 leading-snug">
+                        <span className="font-semibold mr-1">{actor.username}</span>
+                        {comment.text}
+                      </p>
+                      <p className="text-[11px] text-gray-400 mt-0.5">
+                        {timeAgo(comment.created_at?.toISOString())}
+                      </p>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+
+            {comments?.length && comments.length > 0 && has_next_page && (
+              <button
+                onClick={() => loadNextPage()}
+                disabled={is_loading_next_page}
+                className="w-full text-sm text-blue-500 font-medium py-2 disabled:opacity-50"
+              >
+                {is_loading_next_page ? "Loading…" : "Load more comments"}
+              </button>
+            )}
+          </div>
+
+          {/* Compose */}
+          <div className="border-t border-gray-100 px-4 py-3 flex items-center gap-3">
+            <input
+              value={commentDraft}
+              onChange={(e) => setCommentDraft(e.target.value)}
+              onKeyDown={async (e) => {
+                if (e.key === "Enter" && commentDraft.trim() && !isSubmittingComment) {
+                  setIsSubmittingComment(true);
+                  await addComment(activity.id, commentDraft.trim());
+                  setCommentDraft("");
+                  setIsSubmittingComment(false);
+                }
+              }}
+              placeholder="Add a comment…"
+              className="flex-1 text-sm bg-gray-50 rounded-full px-4 py-2 outline-none focus:ring-2 focus:ring-purple-200 placeholder:text-gray-400"
+            />
+            <button
+              disabled={!commentDraft.trim() || isSubmittingComment}
+              onClick={async () => {
+                setIsSubmittingComment(true);
+                await addComment(activity.id, commentDraft.trim());
+                setCommentDraft("");
+                setIsSubmittingComment(false);
+              }}
+              className="shrink-0 w-9 h-9 rounded-full bg-purple-500 flex items-center justify-center disabled:opacity-40 active:scale-90 transition-transform"
+            >
+              {isSubmittingComment ? (
+                <div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+              ) : (
+                <Send className="size-4 text-white" strokeWidth={2} />
+              )}
+            </button>
+          </div>
+        </DrawerContent>
+      </Drawer>
+    </>
   );
 }
 
@@ -269,26 +411,20 @@ function StoriesRow({ userAvatar }: { userAvatar?: string }) {
 
 export default function Home() {
   const { user, client } = useAuth();
-  const [activities, setActivities] = useState<ActivityResponse[]>([]);
   const [loading, setLoading] = useState(true);
-  const [liked, setLiked] = useState<Record<string, boolean>>({});
-  const [bookmarked, setBookmarked] = useState<Record<string, boolean>>({});
+  const [feed, setFeed] = useState<Feed | undefined>(undefined);
+  const { activities, loadNextPage, has_next_page, is_loading } = useFeedActivities(feed);
+  const limit = 2;
 
   const fetchFeed = useCallback(async () => {
     if (!client || !user) return;
     setLoading(true);
     try {
-      // Timeline feed aggregates posts from people the user follows
       const feed = client.feed("timeline", user.id);
-      // const result = await (feed as any).getActivities({
-      //   limit: 20,
-      //   withReactionCounts: true,
-      //   enrich: true,
-      // });
-      const response = await feed.getOrCreate({ watch: true, limit: 20 });
+      const response = await feed.getOrCreate({ watch: true, limit });
       const activities = response.activities ?? [];
       if (activities.length > 0) {
-        setActivities(activities);
+        setFeed(feed);
       } else {
         throw new Error("No activities found");
       }
@@ -296,16 +432,11 @@ export default function Home() {
       try {
         // Fall back to the user's own feed
         const feed = client.feed("user", user.id);
-        // const result = await (feed as any).getActivities({
-        //   limit: 20,
-        //   withReactionCounts: true,
-        //   enrich: true,
-        // });
-        const response = await feed.getOrCreate({ watch: true, limit: 20 });
-        const activities = response.activities ?? [];
-        setActivities(activities);
+        const response = await feed.getOrCreate({ watch: true, limit });
+        response.activities ?? [];
+        setFeed(feed);
       } catch {
-        setActivities([]);
+        setFeed(undefined);
       }
     } finally {
       setLoading(false);
@@ -315,11 +446,6 @@ export default function Home() {
   useEffect(() => {
     fetchFeed();
   }, [fetchFeed]);
-
-  const toggleLike = (id: string) =>
-    setLiked((prev) => ({ ...prev, [id]: !prev[id] }));
-  const toggleBookmark = (id: string) =>
-    setBookmarked((prev) => ({ ...prev, [id]: !prev[id] }));
 
   const userAvatar = user?.user_metadata?.avatar_url as string | undefined;
 
@@ -356,22 +482,35 @@ export default function Home() {
             <div className="flex items-center justify-center py-16">
               <div className="w-6 h-6 border-2 border-gray-200 border-t-purple-500 rounded-full animate-spin" />
             </div>
-          ) : activities.length === 0 ? (
+          ) : activities && activities.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-20 gap-1 text-gray-400">
               <p className="text-sm font-semibold">No posts yet</p>
               <p className="text-xs">Follow people or create your first post!</p>
             </div>
           ) : (
-            activities.map((activity) => (
-              <PostCard
-                key={activity.id}
-                activity={activity}
-                liked={!!liked[activity.id]}
-                bookmarked={!!bookmarked[activity.id]}
-                onToggleLike={() => toggleLike(activity.id)}
-                onToggleBookmark={() => toggleBookmark(activity.id)}
-              />
-            ))
+            <>
+              {activities && activities.map((activity) => (
+                <PostCard
+                  feed={feed}
+                  key={activity.id}
+                  activity={activity}
+                />
+              ))}
+              {is_loading && (
+                <div className="flex items-center justify-center py-4">
+                  <div className="w-6 h-6 border-2 border-gray-200 border-t-purple-500 rounded-full animate-spin" />
+                </div>
+              )}
+              {activities?.length && activities.length > 0 && has_next_page && (
+                <button
+                  onClick={() => loadNextPage()}
+                  disabled={is_loading}
+                  className="w-full text-sm text-blue-500 font-medium py-2 disabled:opacity-50"
+                >
+                  {is_loading ? "Loading…" : "Load more posts"}
+                </button>
+              )}
+            </>
           )}
         </div>
       </div>
