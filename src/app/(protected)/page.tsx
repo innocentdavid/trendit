@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Image from "next/image";
 import {
   Bell,
@@ -853,7 +853,11 @@ export default function Home() {
     setLoading(true);
     try {
       const feed = client.feed("timeline", user.id);
-      const response = await feed.getOrCreate({ watch: true, limit });
+      const response = await feed.getOrCreate({
+        watch: true,
+        limit,
+        filter: { activity_type: "post" },
+      });
       const activities = response.activities ?? [];
       if (activities.length > 0) {
         setFeed(feed);
@@ -862,9 +866,12 @@ export default function Home() {
       }
     } catch {
       try {
-        // Fall back to the user's own feed
         const feed = client.feed("user", user.id);
-        const response = await feed.getOrCreate({ watch: true, limit });
+        const response = await feed.getOrCreate({
+          watch: true,
+          limit,
+          filter: { activity_type: "post" },
+        });
         response.activities ?? [];
         setFeed(feed);
       } catch {
@@ -914,14 +921,14 @@ export default function Home() {
             <div className="flex items-center justify-center py-16">
               <div className="w-6 h-6 border-2 border-gray-200 border-t-purple-500 rounded-full animate-spin" />
             </div>
-          ) : activities && activities.length === 0 ? (
+          ) : (activities?.length ?? 0) === 0 ? (
             <div className="flex flex-col items-center justify-center py-20 gap-1 text-gray-400">
               <p className="text-sm font-semibold">No posts yet</p>
               <p className="text-xs">Follow people or create your first post!</p>
             </div>
           ) : (
             <>
-              {activities && activities.map((activity) => (
+              {activities?.map((activity) => (
                 <PostCard
                   feed={feed}
                   key={activity.id}
@@ -933,7 +940,7 @@ export default function Home() {
                   <div className="w-6 h-6 border-2 border-gray-200 border-t-purple-500 rounded-full animate-spin" />
                 </div>
               )}
-              {activities?.length && activities.length > 0 && has_next_page && (
+              {(activities?.length ?? 0) > 0 && has_next_page && (
                 <button
                   onClick={() => loadNextPage()}
                   disabled={is_loading}

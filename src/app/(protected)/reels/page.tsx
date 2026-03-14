@@ -1,17 +1,11 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useAuth } from "@/contexts/AuthContext";
 import { Feed } from "@stream-io/feeds-client";
 import { useFeedActivities } from "@stream-io/feeds-client/react-bindings";
 import { ReelCard } from "@/components/ReelCard";
-
-function isReelActivity(activity: { type?: string; custom?: unknown }): boolean {
-  const type = activity.type;
-  const custom = activity.custom as Record<string, string> | undefined;
-  return type === "reel" || custom?.content_type === "reel";
-}
 
 export default function ReelsPage() {
   const { user, client } = useAuth();
@@ -23,11 +17,6 @@ export default function ReelsPage() {
   const { activities, loadNextPage, has_next_page, is_loading } =
     useFeedActivities(feed);
 
-  const reels = useMemo(
-    () => (activities ?? []).filter(isReelActivity),
-    [activities]
-  );
-
   const fetchFeed = useCallback(async () => {
     if (!client || !user) return;
     setLoading(true);
@@ -36,6 +25,7 @@ export default function ReelsPage() {
       const response = await timelineFeed.getOrCreate({
         watch: true,
         limit: 20,
+        filter: { activity_type: "reel" },
       });
       const acts = response.activities ?? [];
       if (acts.length > 0) {
@@ -46,7 +36,11 @@ export default function ReelsPage() {
     } catch {
       try {
         const userFeed = client.feed("user", user.id);
-        await userFeed.getOrCreate({ watch: true, limit: 20 });
+        await userFeed.getOrCreate({
+          watch: true,
+          limit: 20,
+          filter: { activity_type: "reel" },
+        });
         setFeed(userFeed);
       } catch {
         setFeed(undefined);
@@ -85,7 +79,7 @@ export default function ReelsPage() {
     const children = el.querySelectorAll("[data-reel-index]");
     children.forEach((child) => observer.observe(child));
     return () => observer.disconnect();
-  }, [reels.length]);
+  }, [activities?.length ?? 0]);
 
   return (
     <div className="flex flex-col h-screen bg-black max-w-sm mx-auto">
@@ -110,7 +104,7 @@ export default function ReelsPage() {
           <div className="h-full flex items-center justify-center">
             <div className="w-8 h-8 border-2 border-white/20 border-t-white rounded-full animate-spin" />
           </div>
-        ) : reels.length === 0 ? (
+        ) : (activities?.length ?? 0) === 0 ? (
           <div className="h-full flex flex-col items-center justify-center gap-4 px-6 text-center">
             <p className="text-base font-semibold text-white">
               No reels yet
@@ -127,7 +121,7 @@ export default function ReelsPage() {
           </div>
         ) : (
           <>
-            {reels.map((activity, index) => (
+            {(activities ?? []).map((activity, index) => (
               <section
                 key={activity.id}
                 data-reel-index={index}
